@@ -40,26 +40,37 @@ Flask + Gunicorn ile sunulan üç HTTP endpoint'i:
 
 Dört servis, üç katman halinde dizilmiş; her katman kendi izole ağında. Temel fikir: **trafik yalnızca bir adım içeri hareket edebilir, asla bir katmanı atlayamaz.** İnternet nginx'e ulaşır; nginx API'ye ulaşır; veri katmanına yalnızca API ulaşır.
 
+```mermaid
+flowchart TB
+    client(["🌐 İnternet / Host"])
+
+    subgraph PUB["🔓 public · dışarıya açılan tek kapı"]
+        nginx["nginx<br/>reverse proxy<br/>non-root"]
+    end
+
+    subgraph APP["🔒 app_net · internal · internet yok"]
+        api["api<br/>Flask uygulaması<br/>non-root"]
+    end
+
+    subgraph DATA["🔒 data_net · tamamen izole"]
+        postgres[("postgres<br/>veritabanı")]
+        redis[("redis<br/>cache / sayaç")]
+    end
+
+    client -->|"yalnızca :8080 açık"| nginx
+    nginx -->|"app_net üzerinden"| api
+    api -->|"data_net üzerinden"| postgres
+    api -->|"data_net üzerinden"| redis
+    nginx -. "🚫 engelli — data_net'te değil" .-> DATA
+
+    classDef svc fill:#eef2ff,stroke:#4f46e5,color:#111827;
+    classDef db fill:#ecfdf5,stroke:#059669,color:#111827;
+    class nginx,api svc;
+    class postgres,redis db;
+    linkStyle 4 stroke:#dc2626,stroke-width:2px;
 ```
-                    HOST
-                     │  yalnızca :8080 yayınlanmış
-   ══════════════════│═══════════════════════════════════  public ağı
-                     ▼
-              ┌──────────────┐
-              │    nginx     │  reverse proxy (uid 101)
-              └──────┬───────┘
-   ══════════════════│═══════════════════════════════════  app_net  (internal)
-                     ▼
-              ┌──────────────┐
-              │     api      │  Flask + Gunicorn (uid 1000)
-              └──────┬───────┘
-   ══════════════════│═══════════════════════════════════  data_net (internal)
-             ┌───────┴────────┐
-             ▼                ▼
-      ┌────────────┐   ┌────────────┐
-      │  postgres  │   │   redis    │   veritabanı + cache (uid 999)
-      └────────────┘   └────────────┘
-```
+
+*Trafik yalnızca bir adım içeri gider. İnternet sadece `nginx`'e, `nginx` sadece `api`'ye ulaşır; veri katmanına yalnızca `api` erişebilir — `nginx` onu göremez bile.*
 
 ### Servisler (container'lar)
 

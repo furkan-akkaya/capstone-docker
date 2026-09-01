@@ -40,26 +40,37 @@ Three HTTP endpoints served by Flask + Gunicorn:
 
 Four services, arranged in three tiers, each tier on its own isolated network. The core idea: **traffic can only move one step inward, never skip a layer.** The internet can reach nginx; nginx can reach the API; only the API can reach the data tier.
 
+```mermaid
+flowchart TB
+    client(["🌐 Internet / Host"])
+
+    subgraph PUB["🔓 public · the only door to the outside"]
+        nginx["nginx<br/>reverse proxy<br/>non-root"]
+    end
+
+    subgraph APP["🔒 app_net · internal · no internet"]
+        api["api<br/>Flask app<br/>non-root"]
+    end
+
+    subgraph DATA["🔒 data_net · fully isolated"]
+        postgres[("postgres<br/>database")]
+        redis[("redis<br/>cache / counter")]
+    end
+
+    client -->|"only :8080 exposed"| nginx
+    nginx -->|"over app_net"| api
+    api -->|"over data_net"| postgres
+    api -->|"over data_net"| redis
+    nginx -. "🚫 blocked — not on data_net" .-> DATA
+
+    classDef svc fill:#eef2ff,stroke:#4f46e5,color:#111827;
+    classDef db fill:#ecfdf5,stroke:#059669,color:#111827;
+    class nginx,api svc;
+    class postgres,redis db;
+    linkStyle 4 stroke:#dc2626,stroke-width:2px;
 ```
-                    HOST
-                     │  only :8080 is published
-   ══════════════════│═══════════════════════════════════  public network
-                     ▼
-              ┌──────────────┐
-              │    nginx     │  reverse proxy (uid 101)
-              └──────┬───────┘
-   ══════════════════│═══════════════════════════════════  app_net  (internal)
-                     ▼
-              ┌──────────────┐
-              │     api      │  Flask + Gunicorn (uid 1000)
-              └──────┬───────┘
-   ══════════════════│═══════════════════════════════════  data_net (internal)
-             ┌───────┴────────┐
-             ▼                ▼
-      ┌────────────┐   ┌────────────┐
-      │  postgres  │   │   redis    │   database + cache (uid 999)
-      └────────────┘   └────────────┘
-```
+
+*Traffic only moves one step inward. The internet reaches only `nginx`; `nginx` reaches only `api`; and `api` alone can reach the data tier — `nginx` can't even see it.*
 
 ### Services (the containers)
 
