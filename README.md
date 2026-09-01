@@ -1,5 +1,7 @@
 # Cloud-Native Capstone — Hardened Docker → Production-Grade Kubernetes
 
+**English** | [Türkçe](README.tr.md)
+
 ![ci](https://github.com/furkan-akkaya/capstone-docker/actions/workflows/ci.yaml/badge.svg)
 
 A small `nginx → Flask API → PostgreSQL + Redis` stack, taken from a **security-hardened Docker Compose** deployment all the way to a **production-shaped Kubernetes** deployment — with zero-trust network segmentation, Pod Security Admission, autoscaling, and a GitOps-ready Kustomize layout.
