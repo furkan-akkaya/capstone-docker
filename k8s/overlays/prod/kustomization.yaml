@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Production overlay: HA replicas, autoscaling, and an immutable image tag
+# pulled from a registry (instead of a locally-built :latest).
+resources:
+  - ../../base
+  - hpa.yaml
+
+replicas:
+  - name: nginx
+    count: 3
+
+# Pin to an immutable, registry-hosted tag. In a real pipeline this tag is the
+# git SHA or a semver produced by CI — never a mutable :latest in production.
+images:
+  - name: capstone-api
+    newName: ghcr.io/furkan-akkaya/capstone-api
+    newTag: v1.0.0

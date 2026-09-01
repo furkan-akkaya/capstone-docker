@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: capstone
+
+resources:
+  - namespace.yaml
+  - serviceaccounts.yaml
+  - secret.yaml
+  - postgres.yaml
+  - redis.yaml
+  - api.yaml
+  - nginx.yaml
+  - ingress.yaml
+  - network-policies.yaml
+  - pdb.yaml
+
+# Adds a shared label to every object without touching pod selectors.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: capstone
+    includeSelectors: false
+
+# Single source of truth for the nginx config: reuse the same file the Docker
+# stack uses. Kustomize appends a content hash to the ConfigMap name and rewrites
+# the volume reference, so editing nginx.conf triggers a rolling restart.
+configMapGenerator:
+  - name: nginx-conf
+    files:
+      - nginx.conf
+
+# The API image is built locally (see Dockerfile). Overlays can repoint this at a
+# real registry + immutable tag.
+images:
+  - name: capstone-api
+    newTag: latest

@@ -25,10 +25,14 @@ def index():
 
 @app.route("/db-check")
 def db_check():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT 1;")
-    result = cur.fetchone()
-    cur.close()
-    conn.close()
-    return jsonify(db=result[0])
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT 1;")
+        result = cur.fetchone()
+        cur.close()
+        return jsonify(db=result[0])
+    finally:
+        if conn is not None:
+            conn.close()

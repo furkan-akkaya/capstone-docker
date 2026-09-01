@@ -92,7 +92,9 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Single source of truth: the same nginx config the Kubernetes stage
+      # loads into a ConfigMap.
+      - ./k8s/base/nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
       - public
       - app_net

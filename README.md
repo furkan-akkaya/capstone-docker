@@ -1,45 +1,176 @@
-# Hardened Multi-Service Docker Capstone
+# Cloud-Native Capstone — Hardened Docker → Production-Grade Kubernetes
 
-Nginx → Flask API → PostgreSQL + Redis mimarisinde, ağ segmentasyonu ve container hardening uygulanmış, uçtan uca çalışan bir Docker Compose sistemi.
+![ci](https://github.com/furkan-akkaya/capstone-docker/actions/workflows/ci.yaml/badge.svg)
 
-## Mimari
+A small `nginx → Flask API → PostgreSQL + Redis` stack, taken from a **security-hardened Docker Compose** deployment all the way to a **production-shaped Kubernetes** deployment — with zero-trust network segmentation, Pod Security Admission, autoscaling, and a GitOps-ready Kustomize layout.
 
-- `public` network: sadece nginx burada, host'a açık tek network
-- `app_net` (`internal: true`): nginx ↔ api arası, dış dünyaya çıkışı yok
-- `data_net` (`internal: true`): api ↔ postgres/redis arası, tamamen izole — postgres ve redis'e host'tan hiçbir şekilde doğrudan erişilemez
+The application is deliberately tiny so the interesting part is the **operational and security engineering around it**, not the business logic.
 
-## Güvenlik Sertleştirmeleri (Hardening)
+---
 
-| Katman | Uygulama |
-|---|---|
-| Non-root çalıştırma | Her serviste ayrı, sabit UID (`appuser`, `999:999`, `101:101`) |
-| Capability kısıtlama | `cap_drop: ALL` her serviste |
-| Privilege escalation engeli | `security_opt: no-new-privileges:true` |
-| Read-only filesystem | api ve nginx `read_only: true` + gerekli yerlerde `tmpfs` |
-| Multi-stage build | API image'ında build araçları (gcc, libpq-dev) final image'da yok |
-| Network segmentasyonu | Veritabanı ve cache dış dünyayı hiç görmüyor |
-| Healthcheck tabanlı bağımlılık | `depends_on: condition: service_healthy` — servisler gerçekten hazır olmadan başlamıyor |
+## The application
 
-## Nasıl Çalıştırılır
+Three HTTP endpoints served by Flask + Gunicorn:
 
-\`\`\`bash
-cp .env.example .env
-# .env içindeki POSTGRES_PASSWORD'u değiştir
-docker compose up -d
+| Endpoint    | What it does                                        |
+|-------------|-----------------------------------------------------|
+| `/health`   | Liveness/readiness signal — `{"status":"ok"}`       |
+| `/`         | Increments a **Redis** counter — proves cache wiring |
+| `/db-check` | Runs `SELECT 1` on **PostgreSQL** — proves DB wiring |
+
+---
+
+## Two deployment stages, one codebase
+
+This repo tells a progression. The same four services, the same nginx config, deployed two ways.
+
+### Stage 1 — Hardened Docker Compose
+
+```bash
+cp .env.example .env      # then edit POSTGRES_PASSWORD
+make compose-up
 curl http://localhost:8080/health
-\`\`\`
+```
 
-## Gerçek Dünya Debug Hikayesi
+Layered network isolation with three bridge networks:
 
-Bu proje "ilk denemede çalıştı" değil — hardening katmanları birbiriyle çatıştığında ortaya çıkan gerçek sorunları çözerek ilerledi:
+```
+          host :8080
+              │
+        ┌─────▼─────┐   public         (only nginx is here)
+        │   nginx   │
+        └─────┬─────┘
+              │         app_net  (internal: true — no route to the internet)
+        ┌─────▼─────┐
+        │    api    │
+        └─────┬─────┘
+              │         data_net (internal: true — fully isolated)
+      ┌───────┴────────┐
+┌─────▼─────┐   ┌──────▼─────┐
+│ postgres  │   │   redis    │
+└───────────┘   └────────────┘
+```
 
-1. **Redis/Postgres'in resmi image'ları root olarak başlayıp kendini non-root kullanıcıya düşürmeye çalışıyordu** (`gosu`/`setresuid`), `cap_drop: ALL` bunu engelliyordu → çözüm: container'ları doğrudan hedef kullanıcıyla (`user: "999:999"`) başlatmak, hiç root'a uğramadan.
-2. **Postgres, ilk mount edilen volume'a chown atamıyordu** (root'a hiç uğramadığı için sahiplik değiştirme yetkisi yoktu) → çözüm: tek seferlik bir `pg-init` (busybox) container'ı ile volume'u önceden doğru sahiplikle hazırlamak.
-3. **gVisor (`runsc`) runtime'ı, API container'ında Docker'ın embedded DNS'ine giden sorguları bozuyordu** (`Temporary failure in name resolution`) → teşhis edildi, bu servis için gVisor bilinçli olarak kaldırıldı; diğer hardening katmanları (non-root, cap_drop, read-only) korundu.
-4. **Nginx healthcheck'i `localhost`'u IPv6 (`::1`) olarak çözüp reddediliyordu** → `127.0.0.1`'e sabitlenerek çözüldü.
+`postgres` and `redis` sit on an `internal: true` network — **unreachable from the host or the internet**, by design.
 
-Her sorun, körlemesine deneme yerine container logları okunarak teşhis edildi ve tek noktadan düzeltildi.
+### Stage 2 — Kubernetes
 
-## Sonraki Adım
+```bash
+# Local, from scratch: creates a kind cluster, builds+loads the image,
+# installs ingress-nginx, deploys the dev overlay, and smoke-tests it.
+make kind-up
 
-Bu proje Kubernetes'e geçiş için hazırlanıyor — her servis bir Deployment, `pgdata` volume'u bir PersistentVolumeClaim, network segmentasyonu bir NetworkPolicy, healthcheck'ler ise readiness/liveness probe olarak yeniden yazılacak.
+# Or apply to any existing cluster:
+kubectl apply -k k8s/overlays/dev     # or overlays/prod
+```
+
+The three Docker networks become **NetworkPolicies**; the volume becomes a **PVC**; the healthchecks become **probes**; `depends_on` becomes readiness gating; and the whole thing gains autoscaling, disruption budgets, and Pod Security Admission.
+
+---
+
+## Security posture
+
+Applied consistently across **both** stages:
+
+| Control                     | Docker Compose                     | Kubernetes                                             |
+|-----------------------------|------------------------------------|--------------------------------------------------------|
+| Run as non-root             | fixed UIDs (`999`, `101`, `1000`)  | `runAsNonRoot` + explicit `runAsUser` per workload     |
+| Drop Linux capabilities     | `cap_drop: ALL`                    | `capabilities.drop: [ALL]`                             |
+| No privilege escalation     | `no-new-privileges:true`           | `allowPrivilegeEscalation: false`                     |
+| Read-only root filesystem   | `read_only: true` + `tmpfs`        | `readOnlyRootFilesystem: true` + `emptyDir`           |
+| Syscall filtering           | Docker default seccomp             | `seccompProfile: RuntimeDefault`                       |
+| Enforced at admission       | —                                  | **Pod Security Admission: `restricted`** on the namespace |
+| Least-privilege API access  | —                                  | dedicated SA per workload, `automountServiceAccountToken: false` |
+| Minimal image               | multi-stage build (no gcc/libpq-dev in final image)                        ||
+| Secrets                     | `.env` (gitignored)                | `Secret` refs (swap in Sealed Secrets / ESO / SOPS)    |
+
+### Zero-trust networking (Kubernetes)
+
+`k8s/base/network-policies.yaml` starts with a **default-deny** on all pods (ingress *and* egress), then opens only the required paths:
+
+```
+internet ──▶ nginx :8080 ──▶ api :5000 ──┬─▶ postgres :5432
+                                          └─▶ redis    :6379
+```
+
+- Every pod can reach **only** DNS by default.
+- `postgres` and `redis` accept connections **exclusively from `api`**.
+- Nothing in the namespace can egress to the internet.
+
+> Requires a NetworkPolicy-enforcing CNI (Calico / Cilium). kind's default `kindnet` accepts the policy objects but does not enforce them — see the note in `scripts/bootstrap-kind.sh`.
+
+---
+
+## Repository layout
+
+```
+.
+├── api/                      # Flask app + multi-stage Dockerfile
+├── docker-compose.yml        # Stage 1: hardened Compose stack
+├── k8s/
+│   ├── base/                 # Stage 2: environment-agnostic manifests
+│   │   ├── namespace.yaml            # Pod Security Admission: restricted
+│   │   ├── serviceaccounts.yaml      # per-workload SA, token automount off
+│   │   ├── secret.yaml               # DB creds (demo placeholder)
+│   │   ├── postgres.yaml             # StatefulSet + headless Service + PVC
+│   │   ├── redis.yaml                # Deployment + Service
+│   │   ├── api.yaml                  # Deployment + Service + probes
+│   │   ├── nginx.yaml                # Deployment + Service (+ generated ConfigMap)
+│   │   ├── nginx.conf                # single source of truth (Compose + K8s)
+│   │   ├── ingress.yaml              # cluster-edge entrypoint
+│   │   ├── network-policies.yaml     # zero-trust segmentation
+│   │   ├── pdb.yaml                  # PodDisruptionBudgets
+│   │   └── kustomization.yaml
+│   └── overlays/
+│       ├── dev/              # 1 replica per tier — laptop / kind
+│       └── prod/             # HA replicas + HPA + immutable registry tag
+├── kind/                     # local cluster config
+├── scripts/                  # bootstrap / teardown
+├── .github/workflows/ci.yaml # render + schema-validate every overlay, build image
+└── Makefile
+```
+
+Run `make help` to see every task.
+
+---
+
+## Cloud-native concepts demonstrated
+
+- **StatefulSet + `volumeClaimTemplates`** for the database, with `fsGroup` handling volume ownership — the native replacement for the one-shot `pg-init` chown container the Compose stack needed.
+- **Kustomize base + overlays** — one source of truth, environment differences expressed as patches (replicas, autoscaling, image tags). No templating engine, GitOps-ready.
+- **Probes** — `startupProbe` guards a slow first boot, then `liveness`/`readiness` take over; traffic is only routed to Ready pods.
+- **Horizontal Pod Autoscaler** (prod) — CPU-driven scaling with a scale-down stabilization window.
+- **PodDisruptionBudget** — keeps a replica serving through node drains and upgrades.
+- **Pod Security Admission (`restricted`)** — hardening enforced at the API server, not just hoped for.
+- **NetworkPolicy** — explicit, least-privilege east-west traffic.
+- **Immutable, registry-hosted image tags** in prod vs. locally-built `:latest` in dev.
+
+---
+
+## Validate locally (no cluster needed)
+
+```bash
+# Render both overlays and schema-check every object
+kubectl kustomize k8s/overlays/dev  | kubeconform -strict -summary -ignore-missing-schemas
+kubectl kustomize k8s/overlays/prod | kubeconform -strict -summary -ignore-missing-schemas
+```
+
+CI runs exactly this on every push and pull request.
+
+---
+
+## The debugging story (Stage 1)
+
+The hardening didn't "just work" — several controls collided in instructive ways, each diagnosed by **reading container logs**, not guessing:
+
+1. **Redis/Postgres official images start as root and drop to a non-root user** (`gosu`/`setresuid`); `cap_drop: ALL` blocked that step → started the containers **directly** as the target user (`user: "999:999"`), never touching root.
+2. **Postgres couldn't chown its freshly-mounted volume** (it never ran as root, so it lacked the privilege) → added a one-shot `pg-init` busybox to pre-own the volume. *(In Kubernetes, `fsGroup` makes this unnecessary.)*
+3. **gVisor (`runsc`) broke the API container's DNS** to Docker's embedded resolver (`Temporary failure in name resolution`) → gVisor was deliberately removed for that service while every other control stayed.
+4. **The nginx healthcheck resolved `localhost` to IPv6 (`::1`) and was refused** → pinned to `127.0.0.1`.
+
+---
+
+## Requirements
+
+- **Stage 1:** Docker + Docker Compose
+- **Stage 2:** `kubectl`; plus `kind` for a local cluster; `kustomize` + `kubeconform` for offline validation

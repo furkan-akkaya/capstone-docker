@@ -1,0 +1,23 @@
+# Cluster-edge entrypoint. The Ingress controller (e.g. ingress-nginx) terminates
+# outside traffic and forwards to our in-cluster nginx Service, which continues to
+# act as the app-tier reverse proxy in front of the API — mirroring the layered
+# public → app → data design carried over from the Docker Compose stack.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: capstone
+  labels:
+    app.kubernetes.io/name: nginx
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: capstone.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nginx
+                port:
+                  number: 8080

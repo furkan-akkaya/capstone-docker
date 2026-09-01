@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: capstone
+  labels:
+    app.kubernetes.io/part-of: capstone
+    # Pod Security Admission: enforce the strictest built-in profile.
+    # Every pod in this namespace MUST be non-root, drop all capabilities,
+    # disallow privilege escalation, and set a seccomp profile — or it is rejected.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
