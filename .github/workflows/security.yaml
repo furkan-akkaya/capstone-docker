@@ -12,6 +12,9 @@ permissions:
   contents: read
   security-events: write   # required to upload SARIF to the Security tab
 
+env:
+  TRIVY_VERSION: v0.74.0
+
 jobs:
   # ── Dockerfile best-practice / security linting ────────────────────────────
   hadolint:
@@ -22,6 +25,7 @@ jobs:
       - uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: api/Dockerfile
+          config: .hadolint.yaml
 
   # ── Secret scanning across the full git history ────────────────────────────
   gitleaks:
@@ -42,25 +46,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Trivy
+        run: curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin "$TRIVY_VERSION"
+
       - name: Build API image
         run: docker build -t capstone-api:scan ./api
 
-      - name: Trivy scan → human-readable table (build log)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: capstone-api:scan
-          format: table
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
+      - name: Scan image → table (build log)
+        run: trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed capstone-api:scan
 
-      - name: Trivy scan → SARIF
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: capstone-api:scan
-          format: sarif
-          output: trivy-image.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
+      - name: Scan image → SARIF
+        run: trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed --format sarif -o trivy-image.sarif capstone-api:scan
 
       - name: Upload SARIF to the Security tab
         uses: github/codeql-action/upload-sarif@v3
@@ -76,22 +72,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Trivy config → table (build log)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: config
-          scan-ref: .
-          format: table
-          severity: CRITICAL,HIGH,MEDIUM
+      - name: Install Trivy
+        run: curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin "$TRIVY_VERSION"
 
-      - name: Trivy config → SARIF
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: config
-          scan-ref: .
-          format: sarif
-          output: trivy-config.sarif
-          severity: CRITICAL,HIGH,MEDIUM
+      - name: Scan manifests → table (build log)
+        run: trivy config --severity CRITICAL,HIGH,MEDIUM .
+
+      - name: Scan manifests → SARIF
+        run: trivy config --severity CRITICAL,HIGH,MEDIUM --format sarif -o trivy-config.sarif .
 
       - name: Upload SARIF to the Security tab
         uses: github/codeql-action/upload-sarif@v3

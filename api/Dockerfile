@@ -23,7 +23,9 @@ COPY app.py .
 
 RUN chown -R appuser:appuser /app
 
-USER appuser
+# Numeric UID (not the name) so Kubernetes can verify runAsNonRoot without
+# resolving /etc/passwd — and it satisfies hadolint DL3066.
+USER 1000
 EXPOSE 5000
 
 CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app"]

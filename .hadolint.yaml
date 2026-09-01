@@ -1,0 +1,7 @@
+# hadolint configuration
+ignored:
+  # DL3008 — "pin apt package versions". Impractical on a rolling Debian slim
+  # base (exact versions vanish from the mirrors between releases and break the
+  # build). We get reproducibility a better way: the base image itself is pinned
+  # by digest (see api/Dockerfile), and Python deps are pinned in requirements.txt.
+  - DL3008
