@@ -1,0 +1,101 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Re-scan weekly so newly-disclosed CVEs in unchanged images surface.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF to the Security tab
+
+jobs:
+  # ── Dockerfile best-practice / security linting ────────────────────────────
+  hadolint:
+    name: Dockerfile lint (hadolint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: api/Dockerfile
+
+  # ── Secret scanning across the full git history ────────────────────────────
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Image vulnerability scanning (CVEs) ────────────────────────────────────
+  image-cve-scan:
+    name: Image CVE scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -t capstone-api:scan ./api
+
+      - name: Trivy scan → human-readable table (build log)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: capstone-api:scan
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Trivy scan → SARIF
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: capstone-api:scan
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Upload SARIF to the Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true   # needs a public repo or GitHub Advanced Security
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+  # ── IaC / manifest misconfiguration scanning ───────────────────────────────
+  config-scan:
+    name: Manifest misconfig scan (Trivy config)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy config → table (build log)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH,MEDIUM
+
+      - name: Trivy config → SARIF
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: sarif
+          output: trivy-config.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+
+      - name: Upload SARIF to the Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config

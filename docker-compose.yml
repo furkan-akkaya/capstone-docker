@@ -1,6 +1,6 @@
 services:
   pg-init:
-    image: busybox
+    image: busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
     container_name: capstone-pg-init
     command: ["sh", "-c", "chown -R 999:999 /var/lib/postgresql/data"]
     volumes:
@@ -10,7 +10,7 @@ services:
     restart: "no"
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
     container_name: capstone-postgres
     restart: unless-stopped
     user: "999:999"
@@ -37,7 +37,7 @@ services:
       start_period: 10s
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     container_name: capstone-redis
     restart: unless-stopped
     user: "999:999"
@@ -85,7 +85,7 @@ services:
       start_period: 10s
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     container_name: capstone-nginx
     restart: unless-stopped
     user: "101:101"

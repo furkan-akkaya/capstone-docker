@@ -17,6 +17,13 @@ compose-down: ## Stop the Docker Compose stack
 verify-isolation: ## Prove the isolation & hardening controls hold on the live stack
 	./scripts/verify-isolation.sh
 
+## ─── Supply-chain security ───────────────────────────────────────────────────
+.PHONY: scan
+scan: ## Scan the image for CVEs and the manifests for misconfigs (needs trivy)
+	docker build -t capstone-api:scan ./api
+	trivy image capstone-api:scan --severity CRITICAL,HIGH --ignore-unfixed
+	trivy config . --severity CRITICAL,HIGH,MEDIUM
+
 ## ─── Kubernetes (stage 2) ────────────────────────────────────────────────────
 .PHONY: build validate render kind-up deploy-dev deploy-prod verify kind-down
 build: ## Build the API image

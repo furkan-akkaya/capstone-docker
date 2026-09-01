@@ -3,6 +3,8 @@
 [English](README.md) | **Türkçe**
 
 ![ci](https://github.com/furkan-akkaya/capstone-docker/actions/workflows/ci.yaml/badge.svg)
+![security](https://github.com/furkan-akkaya/capstone-docker/actions/workflows/security.yaml/badge.svg)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Küçük bir `nginx → Flask API → PostgreSQL + Redis` yığını; **güvenlik açısından sertleştirilmiş (hardened) bir Docker Compose** kurulumundan alınıp **production'a hazır bir Kubernetes** kurulumuna kadar taşındı — zero-trust ağ segmentasyonu, Pod Security Admission, otomatik ölçekleme ve GitOps'a hazır bir Kustomize yapısıyla.
 
@@ -216,6 +218,32 @@ All isolation & hardening controls verified.
 
 ---
 
+## Tedarik zinciri güvenliği (CI)
+
+Runtime hardening *çalışan* bir container'ı korur. Tedarik zinciri güvenliği ise
+**image'a neyin girdiğini ve nasıl build edildiğini** korur — resmin diğer yarısı.
+Her push ve pull request (artı haftalık cron) şunları çalıştırır:
+
+| Kontrol | Araç | Ne yakalar |
+|---|---|---|
+| Dockerfile lint | **hadolint** | güvensiz / verimsiz Dockerfile kalıpları |
+| Secret tarama | **gitleaks** | git geçmişine yanlışlıkla girmiş kimlik bilgileri |
+| Image CVE tarama | **Trivy** | build edilen image'daki bilinen açıklar → **Security** sekmesinde SARIF |
+| Manifest misconfig taraması | **Trivy config** | güvensiz Kubernetes / Compose / Dockerfile ayarları |
+| Manifest şema doğrulama | **kubeconform** | cluster'a hiç ulaşmadan geçersiz Kubernetes nesneleri |
+
+Ayrıca herhangi bir taramadan daha önemli iki alışkanlık:
+
+- **Base image'lar digest ile pinli** (`image:tag@sha256:…`) — hareketli bir tag
+  altından değişebilir; digest değişemez. Tekrarlanabilir, kurcalanmaya karşı kanıtlı build'ler.
+- **Bulgular körlemesine bastırılmaz, triyaj edilir** — kabul edilen az sayıda
+  istisna [`.trivyignore`](.trivyignore) içinde *yazılı gerekçelerle* durur (örn.
+  veritabanı salt-okunur root filesystem kullanamaz — motoru data dizinine yazmak zorunda).
+
+Raporlama politikası ve tam model için [`SECURITY.md`](SECURITY.md)'ye bakın.
+
+---
+
 ## Depo yapısı
 
 ```
@@ -244,7 +272,12 @@ All isolation & hardening controls verified.
 │   ├── bootstrap-kind.sh     # tek komutla lokal cluster + dağıtım
 │   ├── teardown-kind.sh
 │   └── verify-isolation.sh   # izolasyon/hardening kontrollerinin geçerliliğini kanıtlar
-├── .github/workflows/ci.yaml # her overlay'i render + şema-valide et, image build et
+├── .github/workflows/
+│   ├── ci.yaml               # her overlay'i render + şema-valide et, image build et
+│   └── security.yaml         # hadolint · gitleaks · Trivy image + config taraması
+├── .trivyignore              # triyaj edilmiş, gerekçeli tarama istisnaları
+├── SECURITY.md               # güvenlik politikası + threat-model göstergesi
+├── LICENSE
 └── Makefile
 ```
 

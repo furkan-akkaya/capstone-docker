@@ -1,0 +1,14 @@
+# Reviewed, justified exceptions. Each is a deliberate design decision — not an
+# oversight. Triaging findings (rather than blindly suppressing them) is the point.
+
+# KSV0014 — "root filesystem is not read-only" on postgres.
+# The database engine must write to its data directory, so a read-only root
+# filesystem is not possible for this container. It is still hardened: runs
+# non-root (999), drops ALL capabilities, no-new-privileges, seccomp
+# RuntimeDefault, a dedicated PVC for data, and /var/run/postgresql as emptyDir.
+AVD-KSV-0014
+
+# KSV0013 — ":latest" image tag.
+# The dev base intentionally uses a locally-built `capstone-api:latest`. The prod
+# overlay (k8s/overlays/prod) repoints it to an immutable, registry-hosted tag.
+AVD-KSV-0013

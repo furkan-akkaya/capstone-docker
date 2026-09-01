@@ -3,6 +3,8 @@
 **English** | [Türkçe](README.tr.md)
 
 ![ci](https://github.com/furkan-akkaya/capstone-docker/actions/workflows/ci.yaml/badge.svg)
+![security](https://github.com/furkan-akkaya/capstone-docker/actions/workflows/security.yaml/badge.svg)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A small `nginx → Flask API → PostgreSQL + Redis` stack, taken from a **security-hardened Docker Compose** deployment all the way to a **production-shaped Kubernetes** deployment — with zero-trust network segmentation, Pod Security Admission, autoscaling, and a GitOps-ready Kustomize layout.
 
@@ -219,6 +221,33 @@ All isolation & hardening controls verified.
 
 ---
 
+## Supply-chain security (CI)
+
+Runtime hardening protects a *running* container. Supply-chain security protects
+**what goes into the image and how it's built** — the other half of the picture.
+Every push and pull request (plus a weekly cron) runs:
+
+| Check | Tool | What it catches |
+|---|---|---|
+| Dockerfile lint | **hadolint** | insecure / inefficient Dockerfile patterns |
+| Secret scan | **gitleaks** | credentials accidentally committed to git history |
+| Image CVE scan | **Trivy** | known vulnerabilities in the built image → SARIF in the **Security** tab |
+| Manifest misconfig scan | **Trivy config** | insecure Kubernetes / Compose / Dockerfile settings |
+| Manifest schema validation | **kubeconform** | invalid Kubernetes objects, before they ever reach a cluster |
+
+Plus two habits that matter more than any single scan:
+
+- **Base images pinned by digest** (`image:tag@sha256:…`) — a moving tag can change
+  under you; the digest can't. Reproducible, tamper-evident builds.
+- **Findings are triaged, not blindly suppressed** — the handful of accepted
+  exceptions live in [`.trivyignore`](.trivyignore) *with written justifications*
+  (e.g. the database can't use a read-only root filesystem — its engine must write
+  to its data directory).
+
+See [`SECURITY.md`](SECURITY.md) for the reporting policy and the full model.
+
+---
+
 ## Repository layout
 
 ```
@@ -247,7 +276,12 @@ All isolation & hardening controls verified.
 │   ├── bootstrap-kind.sh     # one-command local cluster + deploy
 │   ├── teardown-kind.sh
 │   └── verify-isolation.sh   # proves the isolation/hardening controls hold
-├── .github/workflows/ci.yaml # render + schema-validate every overlay, build image
+├── .github/workflows/
+│   ├── ci.yaml               # render + schema-validate every overlay, build image
+│   └── security.yaml         # hadolint · gitleaks · Trivy image + config scans
+├── .trivyignore              # triaged, justified scan exceptions
+├── SECURITY.md               # security policy + threat-model pointer
+├── LICENSE
 └── Makefile
 ```
 
