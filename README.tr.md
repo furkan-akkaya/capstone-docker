@@ -5,10 +5,22 @@
 ![ci](https://github.com/furkan-akkaya/capstone-docker/actions/workflows/ci.yaml/badge.svg)
 ![security](https://github.com/furkan-akkaya/capstone-docker/actions/workflows/security.yaml/badge.svg)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/furkan-akkaya/capstone-docker)
 
 Küçük bir `nginx → Flask API → PostgreSQL + Redis` yığını; **güvenlik açısından sertleştirilmiş (hardened) bir Docker Compose** kurulumundan alınıp **production'a hazır bir Kubernetes** kurulumuna kadar taşındı — zero-trust ağ segmentasyonu, Pod Security Admission, otomatik ölçekleme ve GitOps'a hazır bir Kustomize yapısıyla.
 
 Uygulama bilinçli olarak minik tutuldu; böylece asıl ilgi çekici kısım iş mantığı değil, **onun etrafındaki operasyonel ve güvenlik mühendisliği** oluyor.
+
+## Tarayıcıda canlı dene
+
+**[Open in GitHub Codespaces](https://codespaces.new/furkan-akkaya/capstone-docker)**'e tıkla — tam bir Docker-in-Docker dev container'ı açılır (kubectl + kind kurulu, `.env` hazır). Yüklendiğinde:
+
+```bash
+make compose-up          # sertleştirilmiş yığını ayağa kaldır
+make verify-isolation    # izolasyon & hardening kontrollerini kanıtla
+```
+
+`8080` portu otomatik forward edilir, çalışan uygulama tarayıcında açılır. Lokal kurulum yok, host'lanacak/bakımı yapılacak bir şey yok. Kubernetes aşaması için `make kind-up` çalıştır.
 
 ---
 
@@ -272,6 +284,7 @@ Raporlama politikası ve tam model için [`SECURITY.md`](SECURITY.md)'ye bakın.
 │   ├── bootstrap-kind.sh     # tek komutla lokal cluster + dağıtım
 │   ├── teardown-kind.sh
 │   └── verify-isolation.sh   # izolasyon/hardening kontrollerinin geçerliliğini kanıtlar
+├── .devcontainer/            # tek tık GitHub Codespaces ortamı
 ├── .github/workflows/
 │   ├── ci.yaml               # her overlay'i render + şema-valide et, image build et
 │   └── security.yaml         # hadolint · gitleaks · Trivy image + config taraması

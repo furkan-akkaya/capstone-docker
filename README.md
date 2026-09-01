@@ -5,10 +5,22 @@
 ![ci](https://github.com/furkan-akkaya/capstone-docker/actions/workflows/ci.yaml/badge.svg)
 ![security](https://github.com/furkan-akkaya/capstone-docker/actions/workflows/security.yaml/badge.svg)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/furkan-akkaya/capstone-docker)
 
 A small `nginx → Flask API → PostgreSQL + Redis` stack, taken from a **security-hardened Docker Compose** deployment all the way to a **production-shaped Kubernetes** deployment — with zero-trust network segmentation, Pod Security Admission, autoscaling, and a GitOps-ready Kustomize layout.
 
 The application is deliberately tiny so the interesting part is the **operational and security engineering around it**, not the business logic.
+
+## Try it live (in your browser)
+
+Click **[Open in GitHub Codespaces](https://codespaces.new/furkan-akkaya/capstone-docker)** — it spins up a full Docker-in-Docker dev container (kubectl + kind preinstalled, `.env` ready). Once it loads:
+
+```bash
+make compose-up          # bring up the hardened stack
+make verify-isolation    # prove the isolation & hardening controls hold
+```
+
+Port `8080` is auto-forwarded, so the running app opens in your browser. No local setup, nothing to host or maintain. For the Kubernetes stage, run `make kind-up`.
 
 ---
 
@@ -276,6 +288,7 @@ See [`SECURITY.md`](SECURITY.md) for the reporting policy and the full model.
 │   ├── bootstrap-kind.sh     # one-command local cluster + deploy
 │   ├── teardown-kind.sh
 │   └── verify-isolation.sh   # proves the isolation/hardening controls hold
+├── .devcontainer/            # one-click GitHub Codespaces environment
 ├── .github/workflows/
 │   ├── ci.yaml               # render + schema-validate every overlay, build image
 │   └── security.yaml         # hadolint · gitleaks · Trivy image + config scans
