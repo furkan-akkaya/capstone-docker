@@ -22,9 +22,65 @@ Flask + Gunicorn ile sunulan üç HTTP endpoint'i:
 
 ---
 
+## Mimari
+
+Dört servis, üç katman halinde dizilmiş; her katman kendi izole ağında. Temel fikir: **trafik yalnızca bir adım içeri hareket edebilir, asla bir katmanı atlayamaz.** İnternet nginx'e ulaşır; nginx API'ye ulaşır; veri katmanına yalnızca API ulaşır.
+
+```
+                    HOST
+                     │  yalnızca :8080 yayınlanmış
+   ══════════════════│═══════════════════════════════════  public ağı
+                     ▼
+              ┌──────────────┐
+              │    nginx     │  reverse proxy (uid 101)
+              └──────┬───────┘
+   ══════════════════│═══════════════════════════════════  app_net  (internal)
+                     ▼
+              ┌──────────────┐
+              │     api      │  Flask + Gunicorn (uid 1000)
+              └──────┬───────┘
+   ══════════════════│═══════════════════════════════════  data_net (internal)
+             ┌───────┴────────┐
+             ▼                ▼
+      ┌────────────┐   ┌────────────┐
+      │  postgres  │   │   redis    │   veritabanı + cache (uid 999)
+      └────────────┘   └────────────┘
+```
+
+### Servisler (container'lar)
+
+| Servis     | Rol                              | Image                | Çalışan kullanıcı | Ağ(lar)             | Port | Host'tan erişilebilir mi? |
+|------------|----------------------------------|----------------------|-------------------|---------------------|------|---------------------------|
+| `nginx`    | Reverse proxy / giriş noktası    | `nginx:1.27-alpine`  | `101:101`         | `public`, `app_net` | 8080 | ✅ evet — yalnızca `:8080` |
+| `api`      | Flask uygulaması                 | `./api`'dan build    | `1000` (`appuser`) | `app_net`, `data_net` | 5000 | ❌ hayır |
+| `postgres` | Veritabanı                       | `postgres:16-alpine` | `999:999`         | `data_net`          | 5432 | ❌ hayır |
+| `redis`    | Cache / sayaç                    | `redis:7-alpine`     | `999:999`         | `data_net`          | 6379 | ❌ hayır |
+| `pg-init`  | Tek seferlik volume izin düzeltici | `busybox`          | root (hemen çıkar) | `data_net`         | —    | ❌ hayır |
+
+### Ağlar (üç katman)
+
+| Ağ         | `internal`? | Üyeler                       | Amaç |
+|------------|-------------|------------------------------|------|
+| `public`   | hayır       | `nginx`                      | Host'a bağlı **tek** ağ. Tüm dış trafik buradan girer — başka hiçbir yerden değil. |
+| `app_net`  | **evet**    | `nginx`, `api`               | Proxy ile uygulama arasındaki özel bağlantı. İnternete çıkışı yok. |
+| `data_net` | **evet**    | `api`, `postgres`, `redis`   | Tamamen izole veri katmanı. Host'tan *ve* nginx'ten erişilemez. |
+
+**Tüm tasarımın anahtarı:** `api`, hem `app_net` hem `data_net` üzerinde bulunan *tek* servistir. Uygulama katmanı ile veri katmanı arasındaki tek ve bilinçli köprüdür. `nginx`, `data_net` üzerinde **değildir**, dolayısıyla `postgres`/`redis`'i isimle bile çözemez — veritabanı, saldırganlara en açık katman için görünmezdir.
+
+### Bir isteğin yolculuğu
+
+1. Bir istemci `http://host:8080/`'a vurur → `public` ağındaki **nginx**'e ulaşır.
+2. nginx isteği **`app_net`** üzerinden **`api:5000`**'e proxy'ler.
+3. api, yanıtı oluşturmak için **`data_net`** üzerinden **`redis:6379`** ve **`postgres:5432`** ile konuşur.
+4. Yanıt aynı yoldan geri döner: api → nginx → istemci.
+
+İstemci veritabanını hiç görmez; veritabanı istemciyi hiç görmez. Her sıçrama tam olarak bir ağ sınırını geçer.
+
+---
+
 ## Tek kod tabanı, iki dağıtım aşaması
 
-Bu repo bir ilerleme hikayesi anlatır: aynı dört servis, aynı nginx config'i, iki farklı şekilde dağıtılıyor.
+Aynı dört servis ve aynı nginx config'i, iki farklı şekilde dağıtılıyor — sertleştirilmiş tek bir host'tan production'a hazır bir cluster'a.
 
 ### Aşama 1 — Sertleştirilmiş Docker Compose
 
@@ -34,26 +90,7 @@ make compose-up
 curl http://localhost:8080/health
 ```
 
-Üç bridge network ile katmanlı ağ izolasyonu:
-
-```
-          host :8080
-              │
-        ┌─────▼─────┐   public         (sadece nginx burada)
-        │   nginx   │
-        └─────┬─────┘
-              │         app_net  (internal: true — internete çıkış yok)
-        ┌─────▼─────┐
-        │    api    │
-        └─────┬─────┘
-              │         data_net (internal: true — tamamen izole)
-      ┌───────┴────────┐
-┌─────▼─────┐   ┌──────▼─────┐
-│ postgres  │   │   redis    │
-└───────────┘   └────────────┘
-```
-
-`postgres` ve `redis`, `internal: true` bir ağda durur — tasarım gereği **host'tan veya internetten erişilemez**.
+Yukarıdaki üç katmanlı ağ modeli, ikisi `internal: true` olan üç Docker bridge network'ü olarak ifade edilir.
 
 ### Aşama 2 — Kubernetes
 
@@ -66,7 +103,16 @@ make kind-up
 kubectl apply -k k8s/overlays/dev     # veya overlays/prod
 ```
 
-Üç Docker network'ü **NetworkPolicy**'lere, volume bir **PVC**'ye, healthcheck'ler **probe**'lara, `depends_on` ise readiness kapılamasına dönüşür; ve tüm sistem otomatik ölçekleme, disruption budget ve Pod Security Admission kazanır.
+Mimari, Kubernetes ilkellerine (primitives) temiz biçimde eşlenir:
+
+| Docker Compose             | Kubernetes                                     |
+|----------------------------|------------------------------------------------|
+| üç izole ağ                | **NetworkPolicy'ler** (default-deny + izin listesi) |
+| adlandırılmış volume (`pgdata`) | **PersistentVolumeClaim** (StatefulSet ile)  |
+| `pg-init` chown container'ı | **`fsGroup`** (kubelet volume sahipliğini ayarlar) |
+| healthcheck'ler            | **readiness / liveness / startup probe'ları**  |
+| `depends_on: healthy`      | readiness kapılama + init sıralaması            |
+| — (yalnızca host seviyesi) | **Pod Security Admission**, HPA, PodDisruptionBudget |
 
 ---
 
@@ -168,6 +214,8 @@ Summary: 13 passed, 0 failed
 All isolation & hardening controls verified.
 ```
 
+---
+
 ## Depo yapısı
 
 ```
@@ -226,17 +274,6 @@ kubectl kustomize k8s/overlays/prod | kubeconform -strict -summary -ignore-missi
 ```
 
 CI, her push ve pull request'te tam olarak bunu çalıştırır.
-
----
-
-## Debug hikayesi (Aşama 1)
-
-Sertleştirme "ilk denemede çalışmadı" — birkaç kontrol öğretici şekillerde çakıştı ve her biri tahminle değil, **container logları okunarak** teşhis edildi:
-
-1. **Redis/Postgres resmi image'ları root olarak başlayıp non-root bir kullanıcıya düşer** (`gosu`/`setresuid`); `cap_drop: ALL` bu adımı engelledi → container'lar doğrudan hedef kullanıcıyla (`user: "999:999"`) başlatıldı, hiç root'a uğramadan.
-2. **Postgres yeni mount edilen volume'unu chown edemedi** (hiç root olmadığı için bu yetkisi yoktu) → volume'u önceden doğru sahiplikle hazırlamak için tek seferlik bir `pg-init` busybox eklendi. *(Kubernetes'te `fsGroup` bunu gereksiz kılar.)*
-3. **gVisor (`runsc`), API container'ının Docker'ın embedded resolver'ına giden DNS'ini bozdu** (`Temporary failure in name resolution`) → gVisor bu servis için bilinçli olarak kaldırıldı, diğer tüm kontroller kaldı.
-4. **Nginx healthcheck'i `localhost`'u IPv6 (`::1`) olarak çözdü ve reddedildi** → `127.0.0.1`'e sabitlendi.
 
 ---
 

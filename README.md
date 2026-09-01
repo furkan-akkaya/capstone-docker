@@ -22,9 +22,65 @@ Three HTTP endpoints served by Flask + Gunicorn:
 
 ---
 
+## Architecture
+
+Four services, arranged in three tiers, each tier on its own isolated network. The core idea: **traffic can only move one step inward, never skip a layer.** The internet can reach nginx; nginx can reach the API; only the API can reach the data tier.
+
+```
+                    HOST
+                     │  only :8080 is published
+   ══════════════════│═══════════════════════════════════  public network
+                     ▼
+              ┌──────────────┐
+              │    nginx     │  reverse proxy (uid 101)
+              └──────┬───────┘
+   ══════════════════│═══════════════════════════════════  app_net  (internal)
+                     ▼
+              ┌──────────────┐
+              │     api      │  Flask + Gunicorn (uid 1000)
+              └──────┬───────┘
+   ══════════════════│═══════════════════════════════════  data_net (internal)
+             ┌───────┴────────┐
+             ▼                ▼
+      ┌────────────┐   ┌────────────┐
+      │  postgres  │   │   redis    │   database + cache (uid 999)
+      └────────────┘   └────────────┘
+```
+
+### Services (the containers)
+
+| Service    | Role                          | Image                | Runs as     | On networks         | Port | Reachable from host? |
+|------------|-------------------------------|----------------------|-------------|---------------------|------|----------------------|
+| `nginx`    | Reverse proxy / entry point   | `nginx:1.27-alpine`  | `101:101`   | `public`, `app_net` | 8080 | ✅ yes — `:8080` only |
+| `api`      | Flask application             | built from `./api`   | `1000` (`appuser`) | `app_net`, `data_net` | 5000 | ❌ no |
+| `postgres` | Database                      | `postgres:16-alpine` | `999:999`   | `data_net`          | 5432 | ❌ no |
+| `redis`    | Cache / counter               | `redis:7-alpine`     | `999:999`   | `data_net`          | 6379 | ❌ no |
+| `pg-init`  | One-shot volume-permission fixer | `busybox`         | root (exits immediately) | `data_net` | — | ❌ no |
+
+### Networks (the three tiers)
+
+| Network    | `internal`? | Members                          | Purpose |
+|------------|-------------|----------------------------------|---------|
+| `public`   | no          | `nginx`                          | The **only** network bound to the host. All outside traffic enters here — and nowhere else. |
+| `app_net`  | **yes**     | `nginx`, `api`                   | Private link between the proxy and the app. No route to the internet. |
+| `data_net` | **yes**     | `api`, `postgres`, `redis`       | Fully isolated data tier. Unreachable from the host *and* from nginx. |
+
+**The key to the whole design:** `api` is the *only* service that sits on both `app_net` and `data_net`. It is the single, deliberate bridge between the app tier and the data tier. `nginx` is **not** on `data_net`, so it can't even resolve `postgres`/`redis` by name — the database is invisible to the layer most exposed to attackers.
+
+### A request's journey
+
+1. A client hits `http://host:8080/` → arrives at **nginx** on the `public` network.
+2. nginx proxies the request over **`app_net`** to **`api:5000`**.
+3. api talks to **`redis:6379`** and **`postgres:5432`** over **`data_net`** to build the response.
+4. The response travels back the same path: api → nginx → client.
+
+The client never sees the database; the database never sees the client. Every hop crosses exactly one network boundary.
+
+---
+
 ## Two deployment stages, one codebase
 
-This repo tells a progression. The same four services, the same nginx config, deployed two ways.
+The same four services and the same nginx config, deployed two ways — from a hardened single host to a production-shaped cluster.
 
 ### Stage 1 — Hardened Docker Compose
 
@@ -34,26 +90,7 @@ make compose-up
 curl http://localhost:8080/health
 ```
 
-Layered network isolation with three bridge networks:
-
-```
-          host :8080
-              │
-        ┌─────▼─────┐   public         (only nginx is here)
-        │   nginx   │
-        └─────┬─────┘
-              │         app_net  (internal: true — no route to the internet)
-        ┌─────▼─────┐
-        │    api    │
-        └─────┬─────┘
-              │         data_net (internal: true — fully isolated)
-      ┌───────┴────────┐
-┌─────▼─────┐   ┌──────▼─────┐
-│ postgres  │   │   redis    │
-└───────────┘   └────────────┘
-```
-
-`postgres` and `redis` sit on an `internal: true` network — **unreachable from the host or the internet**, by design.
+The three-tier network model above is expressed as three Docker bridge networks, two of them `internal: true`.
 
 ### Stage 2 — Kubernetes
 
@@ -66,7 +103,16 @@ make kind-up
 kubectl apply -k k8s/overlays/dev     # or overlays/prod
 ```
 
-The three Docker networks become **NetworkPolicies**; the volume becomes a **PVC**; the healthchecks become **probes**; `depends_on` becomes readiness gating; and the whole thing gains autoscaling, disruption budgets, and Pod Security Admission.
+The architecture maps cleanly onto Kubernetes primitives:
+
+| Docker Compose            | Kubernetes                                    |
+|---------------------------|-----------------------------------------------|
+| three isolated networks   | **NetworkPolicies** (default-deny + allow-list) |
+| named volume (`pgdata`)   | **PersistentVolumeClaim** (via StatefulSet)    |
+| `pg-init` chown container | **`fsGroup`** (kubelet sets volume ownership)  |
+| healthchecks              | **readiness / liveness / startup probes**      |
+| `depends_on: healthy`     | readiness gating + init ordering               |
+| — (host-level only)       | **Pod Security Admission**, HPA, PodDisruptionBudget |
 
 ---
 
@@ -171,6 +217,8 @@ Summary: 13 passed, 0 failed
 All isolation & hardening controls verified.
 ```
 
+---
+
 ## Repository layout
 
 ```
@@ -229,17 +277,6 @@ kubectl kustomize k8s/overlays/prod | kubeconform -strict -summary -ignore-missi
 ```
 
 CI runs exactly this on every push and pull request.
-
----
-
-## The debugging story (Stage 1)
-
-The hardening didn't "just work" — several controls collided in instructive ways, each diagnosed by **reading container logs**, not guessing:
-
-1. **Redis/Postgres official images start as root and drop to a non-root user** (`gosu`/`setresuid`); `cap_drop: ALL` blocked that step → started the containers **directly** as the target user (`user: "999:999"`), never touching root.
-2. **Postgres couldn't chown its freshly-mounted volume** (it never ran as root, so it lacked the privilege) → added a one-shot `pg-init` busybox to pre-own the volume. *(In Kubernetes, `fsGroup` makes this unnecessary.)*
-3. **gVisor (`runsc`) broke the API container's DNS** to Docker's embedded resolver (`Temporary failure in name resolution`) → gVisor was deliberately removed for that service while every other control stayed.
-4. **The nginx healthcheck resolved `localhost` to IPv6 (`::1`) and was refused** → pinned to `127.0.0.1`.
 
 ---
 
