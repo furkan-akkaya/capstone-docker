@@ -84,6 +84,36 @@ Applied consistently across **both** stages:
 | Minimal image               | multi-stage build (no gcc/libpq-dev in final image)                        ||
 | Secrets                     | `.env` (gitignored)                | `Secret` refs (swap in Sealed Secrets / ESO / SOPS)    |
 
+### Why the hardening matters — the attacker's perspective
+
+None of this is decoration. Each control answers a concrete attack. The point of
+the whole design is **defense in depth**: not "prevent every breach" (impossible),
+but make sure that a single compromise doesn't cascade into total loss.
+
+| Control | The attack it defeats |
+|---|---|
+| **Network segmentation** (postgres/redis on an internal-only tier) | Lateral movement. If an attacker pops the edge (nginx), they still **can't pivot to the database** — the data tier isn't even routable from there. Most real breaches are exactly "perimeter popped → walked to the DB"; this cuts that path. |
+| **Run as non-root** | Post-exploitation power. Code execution inside the API container lands as an unprivileged user — it can't read root-owned files, can't bind privileged ports, can't tamper with the OS. |
+| **Drop ALL capabilities** | Kernel-level abuse. Even *if* the process were root, `CAP_NET_RAW` (packet sniffing/spoofing), `CAP_SYS_ADMIN` (mounts, many escapes), etc. are gone — so the standard container-escape toolbox mostly doesn't work. |
+| **`no-new-privileges`** | Privilege escalation. Defeats the classic "exploit a setuid binary to become root" step — the kernel refuses privilege gains for this process tree. |
+| **Read-only root filesystem** | Persistence. An attacker can't drop a webshell, backdoor, or modified binary — the disk won't accept writes. Malware that needs to write to survive simply can't. |
+| **Seccomp `RuntimeDefault`** | Container escapes. Dangerous/rare syscalls used by kernel exploits are filtered before they reach the kernel. |
+| **Pod Security Admission `restricted`** (K8s) | Malicious/misconfigured manifests. A pod that asks for `privileged`, `hostPath`, or root is **rejected at admission** — the guardrail is enforced by the API server, not left to reviewer discipline. |
+| **ServiceAccount token automount off** (K8s) | Cluster takeover. A compromised API pod has **no Kubernetes bearer token to steal**, so it can't enumerate secrets or attack the control plane — closing off a huge class of K8s lateral movement. |
+| **Secrets out of git** (`.env` / Sealed Secrets / ESO) | Credential leakage. DB passwords never live in the repo as plaintext. |
+| **Minimal multi-stage image** (no compiler, no package manager in the final image) | Living-off-the-land. There's no `gcc`, `apt`, or build toolchain for an attacker to compile an exploit or pull tools with. |
+| **Resource requests/limits** (K8s) | Resource-exhaustion DoS & cryptomining. A runaway or hijacked container is capped by cgroups and can't starve its neighbours. |
+
+**Walk the kill chain.** Suppose an attacker finds RCE in the Flask app — the worst realistic starting point:
+
+1. They have a shell — but as **uid 1000, non-root**, with **all capabilities dropped**.
+2. They try to escalate via a setuid binary → **blocked by `no-new-privileges`**.
+3. They try to drop a persistent backdoor → **read-only filesystem refuses the write**.
+4. They try to pivot to the database → nginx can't even see it, and from the API tier they reach **only** postgres/redis on the exact ports allowed — nothing else, and never the internet (default-deny egress).
+5. On Kubernetes, they look for a service-account token to attack the cluster → **there isn't one mounted**.
+
+Every step after the initial foothold hits a wall. That's the whole point.
+
 ### Zero-trust networking (Kubernetes)
 
 `k8s/base/network-policies.yaml` starts with a **default-deny** on all pods (ingress *and* egress), then opens only the required paths:
@@ -100,6 +130,44 @@ internet ──▶ nginx :8080 ──▶ api :5000 ──┬─▶ postgres :543
 > Requires a NetworkPolicy-enforcing CNI (Calico / Cilium). kind's default `kindnet` accepts the policy objects but does not enforce them — see the note in `scripts/bootstrap-kind.sh`.
 
 ---
+
+## Proof of isolation — verify it yourself
+
+The claims above aren't just asserted; they're checked against the running stack.
+
+```bash
+make compose-up
+make verify-isolation      # or: ./scripts/verify-isolation.sh
+```
+
+The script probes the live containers and fails loudly if any control isn't
+actually enforced:
+
+```
+1. End-to-end path works (internet → nginx → api → postgres/redis)
+  ✔ PASS  /health responds
+  ✔ PASS  / responds (redis counter)
+  ✔ PASS  /db-check responds (postgres)
+
+2. Data tier is NOT exposed to the host  (defeats: direct DB attack from outside)
+  ✔ PASS  postgres 5432 refused from host
+  ✔ PASS  redis 6379 refused from host
+
+3. Network segmentation  (defeats: lateral movement after edge compromise)
+  ✔ PASS  nginx cannot reach postgres (not on data_net)
+  ✔ PASS  nginx cannot reach redis (not on data_net)
+  ✔ PASS  api can reach postgres + redis (only it is on data_net)
+
+4. Container hardening on the API  (defeats: privilege escalation & persistence)
+  ✔ PASS  api runs as non-root (uid=1000)
+  ✔ PASS  api rootfs read-only (cannot drop backdoor)
+  ✔ PASS  all Linux capabilities dropped (cap_drop: ALL)
+  ✔ PASS  privilege escalation disabled (no-new-privileges)
+  ✔ PASS  read-only root filesystem enforced by runtime
+
+Summary: 13 passed, 0 failed
+All isolation & hardening controls verified.
+```
 
 ## Repository layout
 
@@ -125,7 +193,10 @@ internet ──▶ nginx :8080 ──▶ api :5000 ──┬─▶ postgres :543
 │       ├── dev/              # 1 replica per tier — laptop / kind
 │       └── prod/             # HA replicas + HPA + immutable registry tag
 ├── kind/                     # local cluster config
-├── scripts/                  # bootstrap / teardown
+├── scripts/
+│   ├── bootstrap-kind.sh     # one-command local cluster + deploy
+│   ├── teardown-kind.sh
+│   └── verify-isolation.sh   # proves the isolation/hardening controls hold
 ├── .github/workflows/ci.yaml # render + schema-validate every overlay, build image
 └── Makefile
 ```

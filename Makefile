@@ -14,6 +14,9 @@ compose-up: ## Run the hardened Docker Compose stack
 compose-down: ## Stop the Docker Compose stack
 	docker compose down
 
+verify-isolation: ## Prove the isolation & hardening controls hold on the live stack
+	./scripts/verify-isolation.sh
+
 ## ─── Kubernetes (stage 2) ────────────────────────────────────────────────────
 .PHONY: build validate render kind-up deploy-dev deploy-prod verify kind-down
 build: ## Build the API image
