@@ -108,6 +108,8 @@ Yukarıdaki üç katmanlı ağ modeli, ikisi `internal: true` olan üç Docker b
 
 ### Aşama 2 — Kubernetes
 
+Kubernetes, container'ları büyük ölçekte çalıştırmak için kullanılan endüstri standardı sistemdir — birçok makineyi yöneten bir orkestra şefi gibi düşün. Buraya taşınmak aynı güvenlik modelini korur ve üzerine şunları ekler: **kendini iyileştirme** (çöken bir container otomatik yenilenir), **otomatik ölçekleme** (yük altında kopya sayısı artar, sakinken azalır) ve **kesintisiz güncelleme**.
+
 ```bash
 # Lokal, sıfırdan: kind cluster'ı oluşturur, image'ı build edip yükler,
 # ingress-nginx kurar, dev overlay'i dağıtır ve smoke-test eder.
@@ -132,7 +134,7 @@ Mimari, Kubernetes ilkellerine (primitives) temiz biçimde eşlenir:
 
 ## Güvenlik duruşu (Security posture)
 
-**Her iki aşamada** da tutarlı biçimde uygulandı:
+*Sertleştirme (hardening)*, her container'ı öyle kilitlemek demek ki **biri içeri girse bile yapabileceği neredeyse hiçbir şey kalmasın**. Aynı kilit seti her iki aşamada da uygulandı — tablo tam ayarları gösterir, hemen altında düz dille ne anlama geldikleri açıklanır.
 
 | Kontrol                       | Docker Compose                     | Kubernetes                                             |
 |-------------------------------|------------------------------------|--------------------------------------------------------|
@@ -145,6 +147,18 @@ Mimari, Kubernetes ilkellerine (primitives) temiz biçimde eşlenir:
 | En az yetkili API erişimi     | —                                  | workload başına ayrı SA, `automountServiceAccountToken: false` |
 | Minimal image                 | multi-stage build (final image'da gcc/libpq-dev yok)                      ||
 | Sırlar (secrets)              | `.env` (gitignore'da)              | `Secret` referansları (Sealed Secrets / ESO / SOPS ile değiştirilir) |
+
+**Düz anlamıyla — her kilit aslında ne yapıyor:**
+
+- **Müdür değil, sıradan çalışan olarak çalışır** — container içindeki kod host'u kurcalayamaz veya ele geçiremez, çünkü baştan "müdür" (root) yetkisi hiç yoktur.
+- **Kısıtlanmış yetkiler** — her container yalnızca işini yapması için gereken en az sistem yetkisini tutar; tehlikeli olanlar (ham ağ erişimi, disk bağlama) alınmıştır ve hiçbir süreç bir açıkla kendini "müdür" yapamaz.
+- **Donmuş disk** — container'ın dosya sistemi salt-okunurdur; saldırgan içeri zararlı bir dosya bırakamaz, yeniden başlatmayı atlatacak hiçbir iz koyamaz.
+- **Filtrelenmiş sistem çağrıları** — container yalnızca işletim sistemine sıradan istekler yapabilir; kaçış (escape) saldırılarında kullanılan nadir, tehlikeli olanlar engellidir.
+- **Kuralları sistemin kendisi zorlar** (Kubernetes) — platform, bu kuralları çiğneyen bir container'ı başlatmayı bile reddeder; yani güvensiz bir tanesi yanlışlıkla devreye giremez.
+- **Uygulamada cluster anahtarı yok** — ele geçirilen uygulamanın çalacağı bir kimlik bilgisi olmadığı için dönüp sistemin geneline saldıramaz.
+- **Minimal image** — dağıtılan image'da yalnızca çalışması için gereken şey vardır; saldırganın kötüye kullanacağı bir derleyici veya araç seti içeride yoktur.
+
+Tüm bunları zorlayan tam ayarlar yukarıdaki tabloda ve [`k8s/base/`](k8s/base/) ile [`docker-compose.yml`](docker-compose.yml) dosyalarında yer alır.
 
 ### Bu sertleştirme neden önemli — saldırganın gözünden
 

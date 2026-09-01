@@ -108,6 +108,8 @@ The three-tier network model above is expressed as three Docker bridge networks,
 
 ### Stage 2 — Kubernetes
 
+Kubernetes is the industry-standard system for running containers at scale — think of it as an orchestra conductor for many machines. Moving here keeps the same security model and adds **self-healing** (a crashed container is replaced automatically), **autoscaling** (more copies spun up under load, fewer when it's quiet), and **zero-downtime updates**.
+
 ```bash
 # Local, from scratch: creates a kind cluster, builds+loads the image,
 # installs ingress-nginx, deploys the dev overlay, and smoke-tests it.
@@ -132,7 +134,7 @@ The architecture maps cleanly onto Kubernetes primitives:
 
 ## Security posture
 
-Applied consistently across **both** stages:
+*Hardening* means locking each container down so that **even if someone breaks in, there is very little they can do**. The same set of locks is applied in both stages — the table shows the exact settings, and a plain-language explanation follows below it.
 
 | Control                     | Docker Compose                     | Kubernetes                                             |
 |-----------------------------|------------------------------------|--------------------------------------------------------|
@@ -145,6 +147,18 @@ Applied consistently across **both** stages:
 | Least-privilege API access  | —                                  | dedicated SA per workload, `automountServiceAccountToken: false` |
 | Minimal image               | multi-stage build (no gcc/libpq-dev in final image)                        ||
 | Secrets                     | `.env` (gitignored)                | `Secret` refs (swap in Sealed Secrets / ESO / SOPS)    |
+
+**In plain terms — what each lock actually does:**
+
+- **Runs as an ordinary user, not admin** — code inside a container can't reconfigure or take over the host, because it never has admin (root) powers to begin with.
+- **Stripped-down permissions** — each container keeps only the bare-minimum system powers it needs; the dangerous ones (raw networking, mounting disks) are removed, and a process can never promote itself to admin through a loophole.
+- **Frozen disk** — the container's filesystem is read-only, so an intruder can't drop a malicious file or leave anything behind to survive a restart.
+- **Filtered system calls** — the container may only make ordinary requests to the operating system; the rare, dangerous ones used in break-out attacks are blocked.
+- **Rules enforced by the cluster itself** (Kubernetes) — the platform refuses to even start a container that violates these rules, so an unsafe one can't ship by accident.
+- **No cluster keys in the app** — a hijacked app has no credentials to steal, so it can't turn around and attack the wider system.
+- **Minimal image** — the shipped image contains only what's needed to run; there's no compiler or toolset inside for an attacker to abuse.
+
+The exact settings that enforce all of this live in the table above and in the manifests under [`k8s/base/`](k8s/base/) and [`docker-compose.yml`](docker-compose.yml).
 
 ### Why the hardening matters — the attacker's perspective
 
