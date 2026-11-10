@@ -20,7 +20,7 @@ make compose-up          # bring up the hardened stack
 make verify-isolation    # prove the isolation & hardening controls hold
 ```
 
-Port `8080` is auto-forwarded, so the running app opens in your browser. No local setup, nothing to host or maintain. For the Kubernetes stage, run `make kind-up`.
+Port `8080` is auto-forwarded, so the running app opens in your browser. For the Kubernetes stage, run `make kind-up`.
 
 ---
 
@@ -42,17 +42,17 @@ Four services, arranged in three tiers, each tier on its own isolated network. T
 
 ```mermaid
 flowchart TB
-    client(["🌐 Internet / Host"])
+    client(["Internet / Host"])
 
-    subgraph PUB["🔓 public · the only door to the outside"]
+    subgraph PUB["public · the only door to the outside"]
         nginx["nginx<br/>reverse proxy<br/>non-root"]
     end
 
-    subgraph APP["🔒 app_net · internal · no internet"]
+    subgraph APP["app_net · internal · no internet"]
         api["api<br/>Flask app<br/>non-root"]
     end
 
-    subgraph DATA["🔒 data_net · fully isolated"]
+    subgraph DATA["data_net · fully isolated"]
         postgres[("postgres<br/>database")]
         redis[("redis<br/>cache / counter")]
     end
@@ -61,7 +61,7 @@ flowchart TB
     nginx -->|"over app_net"| api
     api -->|"over data_net"| postgres
     api -->|"over data_net"| redis
-    nginx -. "🚫 blocked — not on data_net" .-> DATA
+    nginx -. "blocked — not on data_net" .-> DATA
 
     classDef svc fill:#eef2ff,stroke:#4f46e5,color:#111827;
     classDef db fill:#ecfdf5,stroke:#059669,color:#111827;
@@ -76,11 +76,11 @@ flowchart TB
 
 | Service    | Role                          | Image                | Runs as     | On networks         | Port | Reachable from host? |
 |------------|-------------------------------|----------------------|-------------|---------------------|------|----------------------|
-| `nginx`    | Reverse proxy / entry point   | `nginx:1.27-alpine`  | `101:101`   | `public`, `app_net` | 8080 | ✅ yes — `:8080` only |
-| `api`      | Flask application             | built from `./api`   | `1000` (`appuser`) | `app_net`, `data_net` | 5000 | ❌ no |
-| `postgres` | Database                      | `postgres:16-alpine` | `999:999`   | `data_net`          | 5432 | ❌ no |
-| `redis`    | Cache / counter               | `redis:7-alpine`     | `999:999`   | `data_net`          | 6379 | ❌ no |
-| `pg-init`  | One-shot volume-permission fixer | `busybox`         | root (exits immediately) | `data_net` | — | ❌ no |
+| `nginx`    | Reverse proxy / entry point   | `nginx:1.27-alpine`  | `101:101`   | `public`, `app_net` | 8080 | yes, `:8080` only |
+| `api`      | Flask application             | built from `./api`   | `1000` (`appuser`) | `app_net`, `data_net` | 5000 | no |
+| `postgres` | Database                      | `postgres:16-alpine` | `999:999`   | `data_net`          | 5432 | no |
+| `redis`    | Cache / counter               | `redis:7-alpine`     | `999:999`   | `data_net`          | 6379 | no |
+| `pg-init`  | One-shot volume-permission fixer | `busybox`         | root (exits immediately) | `data_net` | — | no |
 
 ### Networks (the three tiers)
 
@@ -90,7 +90,7 @@ flowchart TB
 | `app_net`  | **yes**     | `nginx`, `api`                   | Private link between the proxy and the app. No route to the internet. |
 | `data_net` | **yes**     | `api`, `postgres`, `redis`       | Fully isolated data tier. Unreachable from the host *and* from nginx. |
 
-**The key to the whole design:** `api` is the *only* service that sits on both `app_net` and `data_net`. It is the single, deliberate bridge between the app tier and the data tier. `nginx` is **not** on `data_net`, so it can't even resolve `postgres`/`redis` by name — the database is invisible to the layer most exposed to attackers.
+`api` is the *only* service that sits on both `app_net` and `data_net`. It is the single, deliberate bridge between the app tier and the data tier. `nginx` is **not** on `data_net`, so it can't even resolve `postgres`/`redis` by name — the database is invisible to the layer most exposed to attackers.
 
 ### A request's journey
 
@@ -98,8 +98,6 @@ flowchart TB
 2. nginx proxies the request over **`app_net`** to **`api:5000`**.
 3. api talks to **`redis:6379`** and **`postgres:5432`** over **`data_net`** to build the response.
 4. The response travels back the same path: api → nginx → client.
-
-The client never sees the database; the database never sees the client. Every hop crosses exactly one network boundary.
 
 ---
 
@@ -119,7 +117,7 @@ The three-tier network model above is expressed as three Docker bridge networks,
 
 ### Stage 2 — Kubernetes
 
-Kubernetes is the industry-standard system for running containers at scale — think of it as an orchestra conductor for many machines. Moving here keeps the same security model and adds **self-healing** (a crashed container is replaced automatically), **autoscaling** (more copies spun up under load, fewer when it's quiet), and **zero-downtime updates**.
+Kubernetes is the industry-standard system for running containers at scale. Moving here keeps the same security model and adds **self-healing** (a crashed container is replaced automatically), **autoscaling** (more copies spun up under load, fewer when it's quiet), and **zero-downtime updates**.
 
 ```bash
 # Local, from scratch: creates a kind cluster, builds+loads the image,
@@ -159,23 +157,11 @@ The architecture maps cleanly onto Kubernetes primitives:
 | Minimal image               | multi-stage build (no gcc/libpq-dev in final image)                        ||
 | Secrets                     | `.env` (gitignored)                | `Secret` refs (swap in Sealed Secrets / ESO / SOPS)    |
 
-**In plain terms — what each lock actually does:**
-
-- **Runs as an ordinary user, not admin** — code inside a container can't reconfigure or take over the host, because it never has admin (root) powers to begin with.
-- **Stripped-down permissions** — each container keeps only the bare-minimum system powers it needs; the dangerous ones (raw networking, mounting disks) are removed, and a process can never promote itself to admin through a loophole.
-- **Frozen disk** — the container's filesystem is read-only, so an intruder can't drop a malicious file or leave anything behind to survive a restart.
-- **Filtered system calls** — the container may only make ordinary requests to the operating system; the rare, dangerous ones used in break-out attacks are blocked.
-- **Rules enforced by the cluster itself** (Kubernetes) — the platform refuses to even start a container that violates these rules, so an unsafe one can't ship by accident.
-- **No cluster keys in the app** — a hijacked app has no credentials to steal, so it can't turn around and attack the wider system.
-- **Minimal image** — the shipped image contains only what's needed to run; there's no compiler or toolset inside for an attacker to abuse.
-
 The exact settings that enforce all of this live in the table above and in the manifests under [`k8s/base/`](k8s/base/) and [`docker-compose.yml`](docker-compose.yml).
 
 ### Why the hardening matters — the attacker's perspective
 
-None of this is decoration. Each control answers a concrete attack. The point of
-the whole design is **defense in depth**: not "prevent every breach" (impossible),
-but make sure that a single compromise doesn't cascade into total loss.
+Each control below maps to a concrete attack. The design follows **defense in depth**: a single compromise should not lead to full access.
 
 | Control | The attack it defeats |
 |---|---|
@@ -199,8 +185,6 @@ but make sure that a single compromise doesn't cascade into total loss.
 4. They try to pivot to the database → nginx can't even see it, and from the API tier they reach **only** postgres/redis on the exact ports allowed — nothing else, and never the internet (default-deny egress).
 5. On Kubernetes, they look for a service-account token to attack the cluster → **there isn't one mounted**.
 
-Every step after the initial foothold hits a wall. That's the whole point.
-
 ### Zero-trust networking (Kubernetes)
 
 `k8s/base/network-policies.yaml` starts with a **default-deny** on all pods (ingress *and* egress), then opens only the required paths:
@@ -220,15 +204,14 @@ internet ──▶ nginx :8080 ──▶ api :5000 ──┬─▶ postgres :543
 
 ## Proof of isolation — verify it yourself
 
-The claims above aren't just asserted; they're checked against the running stack.
+`verify-isolation` checks these controls against the running stack.
 
 ```bash
 make compose-up
 make verify-isolation      # or: ./scripts/verify-isolation.sh
 ```
 
-The script probes the live containers and fails loudly if any control isn't
-actually enforced:
+The script probes the live containers and exits with an error if any control is not enforced:
 
 ```
 1. End-to-end path works (internet → nginx → api → postgres/redis)
@@ -272,7 +255,7 @@ Every push and pull request (plus a weekly cron) runs:
 | Manifest misconfig scan | **Trivy config** | insecure Kubernetes / Compose / Dockerfile settings |
 | Manifest schema validation | **kubeconform** | invalid Kubernetes objects, before they ever reach a cluster |
 
-Plus two habits that matter more than any single scan:
+Other practices:
 
 - **Base images pinned by digest** (`image:tag@sha256:…`) — a moving tag can change
   under you; the digest can't. Reproducible, tamper-evident builds.
