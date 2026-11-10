@@ -20,7 +20,7 @@ make compose-up          # sertleştirilmiş yığını ayağa kaldır
 make verify-isolation    # izolasyon & hardening kontrollerini kanıtla
 ```
 
-`8080` portu otomatik forward edilir, çalışan uygulama tarayıcında açılır. Lokal kurulum yok, host'lanacak/bakımı yapılacak bir şey yok. Kubernetes aşaması için `make kind-up` çalıştır.
+`8080` portu otomatik forward edilir, çalışan uygulama tarayıcında açılır. Kubernetes aşaması için `make kind-up` çalıştır.
 
 ---
 
@@ -42,17 +42,17 @@ Dört servis, üç katman halinde dizilmiş; her katman kendi izole ağında. Te
 
 ```mermaid
 flowchart TB
-    client(["🌐 İnternet / Host"])
+    client(["İnternet / Host"])
 
-    subgraph PUB["🔓 public · dışarıya açılan tek kapı"]
+    subgraph PUB["public · dışarıya açılan tek kapı"]
         nginx["nginx<br/>reverse proxy<br/>non-root"]
     end
 
-    subgraph APP["🔒 app_net · internal · internet yok"]
+    subgraph APP["app_net · internal · internet yok"]
         api["api<br/>Flask uygulaması<br/>non-root"]
     end
 
-    subgraph DATA["🔒 data_net · tamamen izole"]
+    subgraph DATA["data_net · tamamen izole"]
         postgres[("postgres<br/>veritabanı")]
         redis[("redis<br/>cache / sayaç")]
     end
@@ -61,7 +61,7 @@ flowchart TB
     nginx -->|"app_net üzerinden"| api
     api -->|"data_net üzerinden"| postgres
     api -->|"data_net üzerinden"| redis
-    nginx -. "🚫 engelli — data_net'te değil" .-> DATA
+    nginx -. "engelli — data_net'te değil" .-> DATA
 
     classDef svc fill:#eef2ff,stroke:#4f46e5,color:#111827;
     classDef db fill:#ecfdf5,stroke:#059669,color:#111827;
@@ -76,11 +76,11 @@ flowchart TB
 
 | Servis     | Rol                              | Image                | Çalışan kullanıcı | Ağ(lar)             | Port | Host'tan erişilebilir mi? |
 |------------|----------------------------------|----------------------|-------------------|---------------------|------|---------------------------|
-| `nginx`    | Reverse proxy / giriş noktası    | `nginx:1.27-alpine`  | `101:101`         | `public`, `app_net` | 8080 | ✅ evet — yalnızca `:8080` |
-| `api`      | Flask uygulaması                 | `./api`'dan build    | `1000` (`appuser`) | `app_net`, `data_net` | 5000 | ❌ hayır |
-| `postgres` | Veritabanı                       | `postgres:16-alpine` | `999:999`         | `data_net`          | 5432 | ❌ hayır |
-| `redis`    | Cache / sayaç                    | `redis:7-alpine`     | `999:999`         | `data_net`          | 6379 | ❌ hayır |
-| `pg-init`  | Tek seferlik volume izin düzeltici | `busybox`          | root (hemen çıkar) | `data_net`         | —    | ❌ hayır |
+| `nginx`    | Reverse proxy / giriş noktası    | `nginx:1.27-alpine`  | `101:101`         | `public`, `app_net` | 8080 | evet, yalnızca `:8080` |
+| `api`      | Flask uygulaması                 | `./api`'dan build    | `1000` (`appuser`) | `app_net`, `data_net` | 5000 | hayır |
+| `postgres` | Veritabanı                       | `postgres:16-alpine` | `999:999`         | `data_net`          | 5432 | hayır |
+| `redis`    | Cache / sayaç                    | `redis:7-alpine`     | `999:999`         | `data_net`          | 6379 | hayır |
+| `pg-init`  | Tek seferlik volume izin düzeltici | `busybox`          | root (hemen çıkar) | `data_net`         | —    | hayır |
 
 ### Ağlar (üç katman)
 
@@ -90,7 +90,7 @@ flowchart TB
 | `app_net`  | **evet**    | `nginx`, `api`               | Proxy ile uygulama arasındaki özel bağlantı. İnternete çıkışı yok. |
 | `data_net` | **evet**    | `api`, `postgres`, `redis`   | Tamamen izole veri katmanı. Host'tan *ve* nginx'ten erişilemez. |
 
-**Tüm tasarımın anahtarı:** `api`, hem `app_net` hem `data_net` üzerinde bulunan *tek* servistir. Uygulama katmanı ile veri katmanı arasındaki tek ve bilinçli köprüdür. `nginx`, `data_net` üzerinde **değildir**, dolayısıyla `postgres`/`redis`'i isimle bile çözemez — veritabanı, saldırganlara en açık katman için görünmezdir.
+`api`, hem `app_net` hem `data_net` üzerinde bulunan *tek* servistir. Uygulama katmanı ile veri katmanı arasındaki tek ve bilinçli köprüdür. `nginx`, `data_net` üzerinde **değildir**, dolayısıyla `postgres`/`redis`'i isimle bile çözemez — veritabanı, saldırganlara en açık katman için görünmezdir.
 
 ### Bir isteğin yolculuğu
 
@@ -98,8 +98,6 @@ flowchart TB
 2. nginx isteği **`app_net`** üzerinden **`api:5000`**'e proxy'ler.
 3. api, yanıtı oluşturmak için **`data_net`** üzerinden **`redis:6379`** ve **`postgres:5432`** ile konuşur.
 4. Yanıt aynı yoldan geri döner: api → nginx → istemci.
-
-İstemci veritabanını hiç görmez; veritabanı istemciyi hiç görmez. Her sıçrama tam olarak bir ağ sınırını geçer.
 
 ---
 
@@ -119,7 +117,7 @@ Yukarıdaki üç katmanlı ağ modeli, ikisi `internal: true` olan üç Docker b
 
 ### Aşama 2 — Kubernetes
 
-Kubernetes, container'ları büyük ölçekte çalıştırmak için kullanılan endüstri standardı sistemdir — birçok makineyi yöneten bir orkestra şefi gibi düşün. Buraya taşınmak aynı güvenlik modelini korur ve üzerine şunları ekler: **kendini iyileştirme** (çöken bir container otomatik yenilenir), **otomatik ölçekleme** (yük altında kopya sayısı artar, sakinken azalır) ve **kesintisiz güncelleme**.
+Kubernetes, container'ları büyük ölçekte çalıştırmak için kullanılan endüstri standardı sistemdir. Buraya taşınmak aynı güvenlik modelini korur ve üzerine şunları ekler: **kendini iyileştirme** (çöken bir container otomatik yenilenir), **otomatik ölçekleme** (yük altında kopya sayısı artar, sakinken azalır) ve **kesintisiz güncelleme**.
 
 ```bash
 # Lokal, sıfırdan: kind cluster'ı oluşturur, image'ı build edip yükler,
@@ -159,21 +157,11 @@ Mimari, Kubernetes ilkellerine (primitives) temiz biçimde eşlenir:
 | Minimal image                 | multi-stage build (final image'da gcc/libpq-dev yok)                      ||
 | Sırlar (secrets)              | `.env` (gitignore'da)              | `Secret` referansları (Sealed Secrets / ESO / SOPS ile değiştirilir) |
 
-**Düz anlamıyla — her kilit aslında ne yapıyor:**
-
-- **Müdür değil, sıradan çalışan olarak çalışır** — container içindeki kod host'u kurcalayamaz veya ele geçiremez, çünkü baştan "müdür" (root) yetkisi hiç yoktur.
-- **Kısıtlanmış yetkiler** — her container yalnızca işini yapması için gereken en az sistem yetkisini tutar; tehlikeli olanlar (ham ağ erişimi, disk bağlama) alınmıştır ve hiçbir süreç bir açıkla kendini "müdür" yapamaz.
-- **Donmuş disk** — container'ın dosya sistemi salt-okunurdur; saldırgan içeri zararlı bir dosya bırakamaz, yeniden başlatmayı atlatacak hiçbir iz koyamaz.
-- **Filtrelenmiş sistem çağrıları** — container yalnızca işletim sistemine sıradan istekler yapabilir; kaçış (escape) saldırılarında kullanılan nadir, tehlikeli olanlar engellidir.
-- **Kuralları sistemin kendisi zorlar** (Kubernetes) — platform, bu kuralları çiğneyen bir container'ı başlatmayı bile reddeder; yani güvensiz bir tanesi yanlışlıkla devreye giremez.
-- **Uygulamada cluster anahtarı yok** — ele geçirilen uygulamanın çalacağı bir kimlik bilgisi olmadığı için dönüp sistemin geneline saldıramaz.
-- **Minimal image** — dağıtılan image'da yalnızca çalışması için gereken şey vardır; saldırganın kötüye kullanacağı bir derleyici veya araç seti içeride yoktur.
-
 Tüm bunları zorlayan tam ayarlar yukarıdaki tabloda ve [`k8s/base/`](k8s/base/) ile [`docker-compose.yml`](docker-compose.yml) dosyalarında yer alır.
 
 ### Bu sertleştirme neden önemli — saldırganın gözünden
 
-Bunların hiçbiri süs değil. Her kontrolün somut bir saldırıya karşılığı var. Tüm tasarımın amacı **defense in depth** (katmanlı savunma): "her ihlali önlemek" değil (imkânsız), tek bir ele geçirmenin topyekûn kayba dönüşmesini engellemek.
+Aşağıdaki her kontrol somut bir saldırıya karşılık geliyor. Tasarım **defense in depth** (katmanlı savunma) yaklaşımını izliyor: tek bir ele geçirme tam erişime dönüşmemeli.
 
 | Kontrol | Engellediği saldırı |
 |---|---|
@@ -197,8 +185,6 @@ Bunların hiçbiri süs değil. Her kontrolün somut bir saldırıya karşılı�
 4. Veritabanına sıçramayı dener → nginx onu göremez bile, API katmanından ise **yalnızca** izin verilen tam portlarda postgres/redis'e ulaşır — başka hiçbir şeye değil ve asla internete değil (default-deny egress).
 5. Kubernetes'te cluster'a saldırmak için bir service-account token'ı arar → **mount edilmiş bir token yoktur**.
 
-İlk yer edinmeden sonraki her adım bir duvara çarpar. Tüm mesele bu.
-
 ### Zero-trust ağ (Kubernetes)
 
 `k8s/base/network-policies.yaml` tüm pod'larda bir **default-deny** ile başlar (hem ingress *hem* egress), ardından yalnızca gereken yolları açar:
@@ -218,14 +204,14 @@ internet ──▶ nginx :8080 ──▶ api :5000 ──┬─▶ postgres :543
 
 ## İzolasyon kanıtı — kendin doğrula
 
-Yukarıdaki iddialar sadece söylenmiyor; çalışan yığına karşı **kontrol ediliyor**.
+`verify-isolation` bu kontrolleri çalışan yığın üzerinde test eder.
 
 ```bash
 make compose-up
 make verify-isolation      # veya: ./scripts/verify-isolation.sh
 ```
 
-Script canlı container'ları yoklar ve herhangi bir kontrol gerçekten zorlanmıyorsa yüksek sesle başarısız olur:
+Script canlı container'ları yoklar ve herhangi bir kontrol uygulanmıyorsa hata vererek çıkar:
 
 ```
 1. End-to-end path works (internet → nginx → api → postgres/redis)
@@ -269,7 +255,7 @@ Her push ve pull request (artı haftalık cron) şunları çalıştırır:
 | Manifest misconfig taraması | **Trivy config** | güvensiz Kubernetes / Compose / Dockerfile ayarları |
 | Manifest şema doğrulama | **kubeconform** | cluster'a hiç ulaşmadan geçersiz Kubernetes nesneleri |
 
-Ayrıca herhangi bir taramadan daha önemli iki alışkanlık:
+Diğer uygulamalar:
 
 - **Base image'lar digest ile pinli** (`image:tag@sha256:…`) — hareketli bir tag
   altından değişebilir; digest değişemez. Tekrarlanabilir, kurcalanmaya karşı kanıtlı build'ler.
